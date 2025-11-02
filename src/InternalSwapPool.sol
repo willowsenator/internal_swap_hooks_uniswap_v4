@@ -12,12 +12,15 @@ import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {SwapMath} from "@uniswap/v4-core/src/libraries/SwapMath.sol";
+import {toBeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
 contract InternalSwapPool is BaseHook {
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
+    using BeforeSwapDeltaLibrary for BeforeSwapDelta;
 
     uint256 public constant DONATE_THRESHOLD_MIN = 0.0001 ether;
 
@@ -43,11 +46,72 @@ contract InternalSwapPool is BaseHook {
         _poolFees[_poolkey.toId()].amount1 += _amount1;
     }
 
-    function _beforeSwap(address, PoolKey calldata, SwapParams calldata, bytes calldata)
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
         returns (bytes4 _selector, BeforeSwapDelta _beforeSwapDelta, uint24 _fee)
     {
+        PoolId  poolId = key.toId();
+
+        if(!params.zeroForOne && _poolFees[poolId].amount1 != 0) {
+           uint tokenIn;
+           uint ethOut;
+
+           (uint160 sqrtPriceX96, ,,) = poolManager.getSlot0(poolId);
+
+           if(params.amountSpecified >= 0){
+            uint amountSpecified = (uint(params.amountSpecified) > _poolFees[poolId].amount1) ? _poolFees[poolId].amount1 : uint(params.amountSpecified);
+
+            // Perform internal swap
+            (, ethOut, tokenIn,) = SwapMath.computeSwapStep(
+                sqrtPriceX96,
+                params.sqrtPriceLimitX96, 
+                poolManager.getLiquidity(poolId), 
+                int(amountSpecified),
+                0
+            );
+
+            _beforeSwapDelta = toBeforeSwapDelta(-int128(int(tokenIn)), int128(int(ethOut)));
+           } 
+           else {
+           
+            (, tokenIn, ethOut,) = SwapMath.computeSwapStep(
+                sqrtPriceX96,
+                params.sqrtPriceLimitX96, 
+                poolManager.getLiquidity(poolId), 
+                int(_poolFees[poolId].amount1),
+                0
+            );
+
+             if(ethOut > uint(-params.amountSpecified)) {
+                // Adjust tokenIn proportionally
+                uint percentage = uint(-params.amountSpecified) * 1e18 / ethOut;
+                tokenIn = tokenIn * percentage / 1e18;
+             }
+
+            _beforeSwapDelta = toBeforeSwapDelta(int128(int(ethOut)), -int128(int(tokenIn)));
+
+           }
+
+           // Update fee balances
+           _poolFees[poolId].amount0 += ethOut;
+              _poolFees[poolId].amount1 -= tokenIn;
+
+            // Sync pool state after internal swap
+            poolManager.sync(key.currency0);
+            poolManager.sync(key.currency1);
+
+
+            poolManager.take(
+                key.currency0,
+                address(this),
+                ethOut
+            );
+
+            key.currency1.settle(poolManager,address(this), tokenIn, false);
+        }
+
+
         _selector = IHooks.beforeSwap.selector;
     }
 
