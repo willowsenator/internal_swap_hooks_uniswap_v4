@@ -51,66 +51,55 @@ contract InternalSwapPool is BaseHook {
         override
         returns (bytes4 _selector, BeforeSwapDelta _beforeSwapDelta, uint24 _fee)
     {
-        PoolId  poolId = key.toId();
+        PoolId poolId = key.toId();
 
-        if(!params.zeroForOne && _poolFees[poolId].amount1 != 0) {
-           uint tokenIn;
-           uint ethOut;
+        if (!params.zeroForOne && _poolFees[poolId].amount1 != 0) {
+            uint256 tokenIn;
+            uint256 ethOut;
 
-           (uint160 sqrtPriceX96, ,,) = poolManager.getSlot0(poolId);
+            (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
 
-           if(params.amountSpecified >= 0){
-            uint amountSpecified = (uint(params.amountSpecified) > _poolFees[poolId].amount1) ? _poolFees[poolId].amount1 : uint(params.amountSpecified);
+            if (params.amountSpecified >= 0) {
+                uint256 amountSpecified = (uint256(params.amountSpecified) > _poolFees[poolId].amount1)
+                    ? _poolFees[poolId].amount1
+                    : uint256(params.amountSpecified);
 
-            // Perform internal swap
-            (, ethOut, tokenIn,) = SwapMath.computeSwapStep(
-                sqrtPriceX96,
-                params.sqrtPriceLimitX96, 
-                poolManager.getLiquidity(poolId), 
-                int(amountSpecified),
-                0
-            );
+                // Perform internal swap
+                (, ethOut, tokenIn,) = SwapMath.computeSwapStep(
+                    sqrtPriceX96, params.sqrtPriceLimitX96, poolManager.getLiquidity(poolId), int256(amountSpecified), 0
+                );
 
-            _beforeSwapDelta = toBeforeSwapDelta(-int128(int(tokenIn)), int128(int(ethOut)));
-           } 
-           else {
-           
-            (, tokenIn, ethOut,) = SwapMath.computeSwapStep(
-                sqrtPriceX96,
-                params.sqrtPriceLimitX96, 
-                poolManager.getLiquidity(poolId), 
-                int(_poolFees[poolId].amount1),
-                0
-            );
+                _beforeSwapDelta = toBeforeSwapDelta(-int128(int256(tokenIn)), int128(int256(ethOut)));
+            } else {
+                (, tokenIn, ethOut,) = SwapMath.computeSwapStep(
+                    sqrtPriceX96,
+                    params.sqrtPriceLimitX96,
+                    poolManager.getLiquidity(poolId),
+                    int256(_poolFees[poolId].amount1),
+                    0
+                );
 
-             if(ethOut > uint(-params.amountSpecified)) {
-                // Adjust tokenIn proportionally
-                uint percentage = uint(-params.amountSpecified) * 1e18 / ethOut;
-                tokenIn = tokenIn * percentage / 1e18;
-             }
+                if (ethOut > uint256(-params.amountSpecified)) {
+                    // Adjust tokenIn proportionally
+                    uint256 percentage = uint256(-params.amountSpecified) * 1e18 / ethOut;
+                    tokenIn = tokenIn * percentage / 1e18;
+                }
 
-            _beforeSwapDelta = toBeforeSwapDelta(int128(int(ethOut)), -int128(int(tokenIn)));
+                _beforeSwapDelta = toBeforeSwapDelta(int128(int256(ethOut)), -int128(int256(tokenIn)));
+            }
 
-           }
-
-           // Update fee balances
-           _poolFees[poolId].amount0 += ethOut;
-              _poolFees[poolId].amount1 -= tokenIn;
+            // Update fee balances
+            _poolFees[poolId].amount0 += ethOut;
+            _poolFees[poolId].amount1 -= tokenIn;
 
             // Sync pool state after internal swap
             poolManager.sync(key.currency0);
             poolManager.sync(key.currency1);
 
+            poolManager.take(key.currency0, address(this), ethOut);
 
-            poolManager.take(
-                key.currency0,
-                address(this),
-                ethOut
-            );
-
-            key.currency1.settle(poolManager,address(this), tokenIn, false);
+            key.currency1.settle(poolManager, address(this), tokenIn, false);
         }
-
 
         _selector = IHooks.beforeSwap.selector;
     }
