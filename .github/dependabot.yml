@@ -20,3 +20,7 @@ updates:
         update-types: ["minor", "patch"]
         patterns:
           - "*"
+    ignore:
+      # Dependabot moves submodules to the tip of the default branch, not to tags. Bump
+      # v4-periphery by hand to a tagged release.
+      - dependency-name: "lib/v4-periphery"
